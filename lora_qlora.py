@@ -1,82 +1,88 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, Trainer
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
-from datasets import load_dataset
-import torch
 
-# 1. Setup Model and Tokenizer
+import os
+os.environ["TRUST_REMOTE_CODE"] = "True" 
+os.environ["TRANSFORMERS_SAFE_MODE"] = "0"
+
+import torch
+import json
+import sys
+from transformers import (AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig)
+from datasets import load_dataset
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
+
+
+
+# 1. Verification Block
+print(f"CUDA Available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    torch.cuda.empty_cache()
+else:
+    print("ERROR: GPU NOT FOUND. Please reinstall PyTorch with CUDA support.")
+    sys.exit()
+
+# 2. Setup Model and Tokenizer
 model_name = "tiiuae/falcon-rw-1b"
-tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=False)
 tokenizer.pad_token = tokenizer.eos_token
 
-# 2. Loading dataset
+# 3. Load Dataset
 dataset = load_dataset("imdb")
 
-"""
-
-"text" : how is the movie
-"lalel" : 1
-
-"""
-
-# 3. FIXED Tokenization function
 def tokenize(batch):
-    # This must RETURN the dictionary to update the dataset
-    outputs = tokenizer(
-        batch['text'], 
-        padding="max_length", 
-        truncation=True, 
-        max_length=128
-    )
-    # For CausalLM, labels are usually the same as input_ids
+    outputs = tokenizer(batch['text'], padding="max_length", truncation=True, max_length=128)
     outputs["labels"] = outputs["input_ids"].copy()
     return outputs
 
-# Map the function and set format
 tokenized = dataset.map(tokenize, batched=True)
 tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
-# 4. Load Model correctly
+# 4. LOAD MODEL IN 4-BIT (Forces GPU usage)
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,
+)
+
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
-    device_map="auto",
-    load_in_8bit=True, # Crucial for prepare_model_for_kbit_training
-    trust_remote_code=True
+    quantization_config=bnb_config,
+    device_map={"": 0}, # FORCING it to the first GPU
+    trust_remote_code=False
 )
 
-# Prepare for kbit training
+# 5. Prepare and Apply LoRA
 model = prepare_model_for_kbit_training(model)
-
-# 5. Apply LoRA
 lora_config = LoraConfig(
-    r=8,
-    lora_alpha=16,
-    lora_dropout=0.1,
-    task_type=TaskType.CAUSAL_LM, # Fixed typo from task_dtype
-    bias="none",
+    r=8, lora_alpha=16, lora_dropout=0.05,
+    task_type=TaskType.CAUSAL_LM, 
     target_modules=["query_key_value"]
 )
-
 model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()
 
 # 6. Training Arguments
 training_args = TrainingArguments(
-    output_dir="./falcon_lora_output",
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
+    output_dir="./falcon_lora_outputs",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
     num_train_epochs=1,
-    logging_steps=10,
-    save_total_limit=1,
-    fp16=True,
-    logging_dir="./logs",
-    report_to="none"
+    fp16=True, # Critical for 1660 Ti
+    report_to="none",
+    logging_steps=1,
+    save_strategy="epoch",
+    
 )
 
-# 7. Trainer (Fixed model=model typo)
+# 7. Trainer
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized["train"].select(range(1000))
+    train_dataset=tokenized["train"].select(range(500))
 )
 
+print("Starting training on GPU...")
+
 trainer.train()
+model.save_pretrained("./falcon_lora_outputs")   
+tokenizer.save_pretrained("./falcon_lora_outputs")
