@@ -7,12 +7,11 @@ import os
 adapter_path = "falcon_lora_outputs"
 peft_config = PeftConfig.from_pretrained(adapter_path)
 
-# 2. Load Base Model - CRITICAL CHANGES HERE
-# Use trust_remote_code=False to use the library's official Falcon code
+# 2. Load Base Model 
 base_model = AutoModelForCausalLM.from_pretrained(
     peft_config.base_model_name_or_path,
-    trust_remote_code=False,  # <--- Change this to False
-    torch_dtype=torch.float16,
+    trust_remote_code=False,  
+    dtype=torch.float16,
     device_map="auto"
 )
 
@@ -21,7 +20,7 @@ model = PeftModel.from_pretrained(base_model, adapter_path)
 model.eval()
 
 # 4. Setup Tokenizer
-tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path, trust_remote_code=False)
+tokenizer = AutoTokenizer.from_pretrained(peft_config.base_model_name_or_path, trust_remote_code=False) 
 tokenizer.pad_token = tokenizer.eos_token
 
 # 5. Pipeline
@@ -37,7 +36,7 @@ pipe = pipeline(
 )
 
 # 6. Run Inference
-prompt = "The movie was absolutely wonderful because"
+prompt = "The movie is not good and is not recommended to"
 result = pipe(prompt)
 
 print("\n--- Generated Output ---")

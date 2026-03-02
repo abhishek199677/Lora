@@ -53,11 +53,13 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # 5. Prepare and Apply LoRA
-model = prepare_model_for_kbit_training(model)
+model = prepare_model_for_kbit_training(model) #
 lora_config = LoraConfig(
-    r=8, lora_alpha=16, lora_dropout=0.05,
+    r=8, 
+    lora_alpha=16, 
+    lora_dropout=0.05,
     task_type=TaskType.CAUSAL_LM, 
-    target_modules=["query_key_value"]
+    target_modules=["query_key_value"]  # falcon specific
 )
 model = get_peft_model(model, lora_config)
 
